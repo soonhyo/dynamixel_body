@@ -1,0 +1,50 @@
+# Scissor Control Configuration
+# This file contains all configurable parameters for the scissor control system
+
+# Hardware Configuration
+hardware:
+  joint_name: "hody_yaw_joint"  # Name of the joint in ROS joint_states
+
+  # Position limits (in radians)
+  position_limits:
+    min_position: -3.14
+    max_position: 0.50
+
+  # Open/Close position mapping
+  # Set open_is_max to true if max_position corresponds to open state
+  # Set open_is_max to false if max_position corresponds to close state
+  position_mapping:
+    open_is_max: true  # true: max_position = open, false: max_position = close
+
+    # Custom open/close positions (optional)
+    # If not specified, will use min/max positions based on open_is_max
+    custom_open_position: null   # Set to specific value to override
+    custom_close_position: null  # Set to specific value to override
+
+# Control Parameters
+control:
+  position_increment: 0.05  # Default increment for manual control
+  min_command_interval: 0.05  # Minimum time between commands (seconds)
+
+  # Trajectory parameters
+  trajectory:
+    default_duration: 0.3    # Default movement duration
+    full_motion_duration: 1.0  # Duration for full open/close motions
+    emergency_duration: 0.5    # Duration for emergency motions
+
+# Safety Configuration
+safety:
+  max_effort: 1.0              # Maximum allowed effort before safety trigger
+  safety_open_distance: 0.2    # Distance to open when safety triggered
+  safety_cooldown: 2.0         # Cooldown period after safety activation (seconds)
+  effort_normal_threshold: 0.8 # Threshold to clear safety (fraction of max_effort)
+
+# ROS Topic Configuration
+topics:
+  trajectory_goal: "/body_robot/position_joint_trajectory_controller/follow_joint_trajectory/goal"
+  joint_states: "/body_robot/joint_states"
+
+# Display Configuration
+display:
+  show_position_precision: 3  # Number of decimal places for position display
+  show_effort_precision: 3    # Number of decimal places for effort display
