@@ -3,19 +3,49 @@
   <arg name="port_name" default="/dev/ttyUSB0" />
   <arg name="baud_rate" default="1000000" />
   <arg name="protocol_1_0" default="true" />
+  <arg name="joint_gui" default="false" doc="Launch joint control GUI"/>
+  <arg name="launch_rviz" default="false" doc="Launch RViz (use human.launch for full visualization)"/>
+  <arg name="launch_head_rotation_bridge" default="true"
+       doc="Expose full_pipeline Float64 head command and measured feedback"/>
+  <arg name="bridge_config" default="$(find dynamixel_body)/config/body_config.yaml"/>
+  <arg name="head_command_topic" default="/hair_task_manager/head_rotation/command"/>
+  <arg name="head_feedback_topic" default="/hair_task_manager/head_rotation/feedback"/>
+  <arg name="joint_state_topic" default="/ros_body/joint_states"/>
+  <arg name="trajectory_command_topic"
+       default="/ros_body/position_joint_trajectory_controller/command"/>
 
   <!-- Include the standard Dynamixel general control launch file -->
+  <!-- Uses human_primitive_model's URDF for the robot model -->
   <include file="$(find dynamixel_general_hw)/launch/dynamixel_general_control.launch">
     <arg name="port_name" value="$(arg port_name)" />
     <arg name="baud_rate" value="$(arg baud_rate)" />
     <arg name="namespace" value="ros_body" />
-    <arg name="robot_description_file" value="$(find dynamixel_body)/urdf/body.urdf" />
+    <arg name="robot_description_file" value="$(find human_primitive_model)/urdf/human_model.urdf.xacro" />
     <arg name="dynamixel_info_file" value="$(find dynamixel_body)/config/dynamixel_info.yaml" unless="$(arg protocol_1_0)" />
     <arg name="dynamixel_info_file" value="$(find dynamixel_body)/config/dynamixel_info_1_0.yaml" if="$(arg protocol_1_0)" />
     <arg name="controllers_file" value="$(find dynamixel_body)/config/body_controllers.yaml" />
     <arg name="controllers_to_start" value="joint_state_controller position_joint_trajectory_controller" />
-    <arg name="launch_rviz" value="true" />
+    <arg name="launch_rviz" value="$(arg launch_rviz)" />
     <arg name="rvizconfig" value="$(find dynamixel_body)/config/body.rviz" />
   </include>
+
+  <!-- Joint control GUI -->
+  <node name="dynamixel_joint_gui" pkg="dynamixel_body" type="dynamixel_joint_gui.py"
+        if="$(arg joint_gui)">
+    <param name="command_topic" value="$(arg head_command_topic)"/>
+    <param name="feedback_topic" value="$(arg head_feedback_topic)"/>
+  </node>
+
+  <!-- Adapter used by hair_task_manager/head_reorient.  The hardware driver
+       remains a standard ros_control JointTrajectory controller. -->
+  <node name="head_rotation_dynamixel_bridge" pkg="dynamixel_body"
+        type="head_rotation_dynamixel_bridge.py" output="screen"
+        required="true" if="$(arg launch_head_rotation_bridge)">
+    <rosparam command="load" file="$(arg bridge_config)"/>
+    <param name="topics/command" value="$(arg head_command_topic)"/>
+    <param name="topics/feedback" value="$(arg head_feedback_topic)"/>
+    <param name="topics/joint_states" value="$(arg joint_state_topic)"/>
+    <param name="topics/trajectory_command" value="$(arg trajectory_command_topic)"/>
+  </node>
 
 </launch>
