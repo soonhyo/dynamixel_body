@@ -7,12 +7,33 @@ details.
 
 ## Hardware computer
 
-Use the same ROS master as the full pipeline and set `ROS_IP` to the hardware
-computer's reachable address, then run:
+First bind the final USB adapter to the stable device name. Stop the body
+driver and Dynamixel Wizard, then identify the adapter (prefer the by-id path):
+
+```bash
+ls -l /dev/serial/by-id/
+rosrun dynamixel_body apply_dynamixel_body_udev.sh \
+  --device /dev/serial/by-id/<BODY_ADAPTER>
+ls -l /dev/dynamixel_body
+```
+
+Use `--dry-run` first to inspect the adapter VID, PID, serial, and generated
+rule without changing `/etc`. The installed rule is
+`/etc/udev/rules.d/99-dynamixel-body.rules`; remove it with:
+
+```bash
+rosrun dynamixel_body apply_dynamixel_body_udev.sh --remove
+```
+
+The installer refuses VID/PID-only matching so another identical Dynamixel
+adapter cannot be selected accidentally.
+
+Then use the same ROS master as the full pipeline and set `ROS_IP` to the
+hardware computer's reachable address. The default launch now uses
+`/dev/dynamixel_body`:
 
 ```bash
 roslaunch dynamixel_body dynamixel_body.launch \
-  port_name:=/dev/ttyUSB0 \
   baud_rate:=1000000 \
   protocol_1_0:=true \
   joint_gui:=false

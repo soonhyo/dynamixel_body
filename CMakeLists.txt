@@ -165,6 +165,11 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+install(PROGRAMS
+  scripts/apply_dynamixel_body_udev.sh
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
 ## Mark executables for installation
 ## See http://docs.ros.org/melodic/api/catkin/html/howto/format1/building_executables.html
 # install(TARGETS ${PROJECT_NAME}_node
@@ -187,7 +192,7 @@ catkin_install_python(PROGRAMS
 # )
 
 ## Mark other files for installation (e.g. launch and bag files, etc.)
-install(DIRECTORY config launch urdf
+install(DIRECTORY config launch udev urdf
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 

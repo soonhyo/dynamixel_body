@@ -1,6 +1,7 @@
 <launch>
   <!-- Arguments for serial port, baud rate, and protocol version -->
-  <arg name="port_name" default="/dev/ttyUSB0" />
+  <arg name="port_name" default="/dev/dynamixel_body"
+       doc="Stable udev symlink installed by apply_dynamixel_body_udev.sh" />
   <arg name="baud_rate" default="1000000" />
   <arg name="protocol_1_0" default="true" />
   <arg name="joint_gui" default="false" doc="Launch joint control GUI"/>

@@ -39,3 +39,15 @@ def test_launch_defaults_match_full_pipeline_topics():
     assert '/hair_task_manager/head_rotation/feedback' in launch
     assert 'type="head_rotation_dynamixel_bridge.py"' in launch
     assert 'launch_head_rotation_bridge' in launch
+    assert 'default="/dev/dynamixel_body"' in launch
+
+
+def test_udev_installer_and_template_are_packaged():
+    package = Path(__file__).parents[1]
+    installer = package / 'scripts' / 'apply_dynamixel_body_udev.sh'
+    template = package / 'udev' / '99-dynamixel-body.rules.template'
+    assert installer.is_file()
+    assert template.is_file()
+    text = template.read_text()
+    assert 'ATTRS{serial}=="@SERIAL@"' in text
+    assert 'SYMLINK+="@SYMLINK@"' in text
