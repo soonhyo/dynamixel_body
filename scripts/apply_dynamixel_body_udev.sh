@@ -13,6 +13,7 @@ remove_rule=false
 usage() {
   cat <<'EOF'
 Create a stable /dev/dynamixel_body symlink for the mannequin Dynamixel adapter.
+The user running this installer is also added to the dialout group.
 
 Usage:
   apply_dynamixel_body_udev.sh --device /dev/ttyUSBX [--symlink NAME] [--dry-run]
@@ -28,6 +29,7 @@ Options:
 The adapter must expose a non-empty USB serial number. Matching only VID/PID
 is intentionally refused because it could claim another Dynamixel adapter.
 Stop dynamixel_body and Dynamixel Wizard before installing or removing a rule.
+Log out and back in after the first install so the new dialout membership applies.
 EOF
 }
 
@@ -75,6 +77,13 @@ if ((EUID != 0)); then
     exit 1
   fi
   admin=(sudo)
+fi
+
+# Preserve the interactive user when the entire script is invoked through sudo.
+# A root-run provisioning job has no non-root user to grant access to.
+access_user="${SUDO_USER:-$(id -un)}"
+if [[ "$access_user" == "root" ]]; then
+  access_user=""
 fi
 
 reload_rules() {
@@ -179,6 +188,23 @@ if "$dry_run"; then
 fi
 
 "${admin[@]}" install -o root -g root -m 0644 "$temporary_rule" "$RULE_PATH"
+
+if [[ -n "$access_user" ]]; then
+  if ! getent group dialout >/dev/null; then
+    echo "ERROR: required group does not exist: dialout" >&2
+    exit 1
+  fi
+  if ! id -nG "$access_user" | tr ' ' '\n' | grep -Fxq dialout; then
+    "${admin[@]}" usermod -aG dialout "$access_user"
+    echo "Added ${access_user} to the dialout group."
+    echo "Log out and back in before starting dynamixel_body."
+  else
+    echo "User ${access_user} is already in the dialout group."
+  fi
+else
+  echo "WARNING: installer was run as root; no non-root user was added to dialout." >&2
+fi
+
 reload_rules
 
 tty_name="$(basename "$resolved_device")"
