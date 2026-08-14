@@ -8,11 +8,14 @@ project(dynamixel_body)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  dynamic_reconfigure
   dynamixel_general_hw
+  message_generation
   roscpp
   rospy
   sensor_msgs
   std_msgs
+  std_srvs
   trajectory_msgs
 )
 
@@ -57,11 +60,11 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
+add_service_files(
+  FILES
+  SetCommandSign.srv
+  SetJointZero.srv
+)
 
 ## Generate actions in the 'action' folder
 # add_action_files(
@@ -71,10 +74,7 @@ find_package(catkin REQUIRED COMPONENTS
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   std_msgs  # Or other packages containing msgs
-# )
+generate_messages()
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
@@ -91,10 +91,9 @@ find_package(catkin REQUIRED COMPONENTS
 ##     and list every .cfg file to be processed
 
 ## Generate dynamic reconfigure parameters in the 'cfg' folder
-# generate_dynamic_reconfigure_options(
-#   cfg/DynReconf1.cfg
-#   cfg/DynReconf2.cfg
-# )
+generate_dynamic_reconfigure_options(
+  cfg/HeadRotationBridge.cfg
+)
 
 ###################################
 ## catkin specific configuration ##
@@ -106,7 +105,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## CATKIN_DEPENDS: catkin_packages dependent projects also need
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
-  CATKIN_DEPENDS dynamixel_general_hw roscpp rospy sensor_msgs std_msgs trajectory_msgs
+  CATKIN_DEPENDS dynamic_reconfigure dynamixel_general_hw message_runtime roscpp rospy sensor_msgs std_msgs std_srvs trajectory_msgs
 )
 
 ###########

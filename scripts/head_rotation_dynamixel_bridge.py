@@ -9,11 +9,22 @@ specific zero and direction convention.
 """
 
 import math
+import threading
 
 import rospy
+from dynamic_reconfigure.server import Server
+from dynamixel_body.cfg import HeadRotationBridgeConfig
+from dynamixel_body.srv import (SetCommandSign, SetCommandSignResponse,
+                                SetJointZero, SetJointZeroResponse)
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64
+from std_srvs.srv import Trigger, TriggerResponse
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+
+def is_finite(value):
+    """Python 2/3 compatible finite-number check."""
+    return not math.isnan(float(value)) and not math.isinf(float(value))
 
 
 def head_to_joint(angle_rad, command_sign, joint_zero_rad):
@@ -38,7 +49,20 @@ def joint_position(message, joint_name):
     if index >= len(message.position):
         return None
     value = float(message.position[index])
-    return value if math.isfinite(value) else None
+    return value if is_finite(value) else None
+
+
+def named_value(message, joint_name, field):
+    """Return a finite named JointState field value, or ``None``."""
+    try:
+        index = list(message.name).index(str(joint_name))
+    except ValueError:
+        return None
+    values = getattr(message, field)
+    if index >= len(values):
+        return None
+    value = float(values[index])
+    return value if is_finite(value) else None
 
 
 class HeadRotationDynamixelBridge:
@@ -59,21 +83,33 @@ class HeadRotationDynamixelBridge:
             '~require_fresh_feedback_before_command', True))
         self.clamp_commands = bool(rospy.get_param(
             '~clamp_commands', False))
+        self.calibration_command_quiet = float(rospy.get_param(
+            '~calibration_command_quiet_s', 2.0))
+        self.calibration_max_velocity = float(rospy.get_param(
+            '~calibration_max_velocity_rad_s', 0.01))
+        self._config_lock = threading.RLock()
 
         if not self.joint_name:
             raise ValueError('joint_name must not be empty')
-        if not math.isfinite(self.command_sign) or abs(self.command_sign) < 1e-12:
+        if not is_finite(self.command_sign) or abs(self.command_sign) < 1e-12:
             raise ValueError('command_sign must be finite and nonzero')
-        if not math.isfinite(self.joint_zero_rad):
+        if not is_finite(self.joint_zero_rad):
             raise ValueError('joint_zero_rad must be finite')
-        if not (math.isfinite(self.minimum_head_rad)
-                and math.isfinite(self.maximum_head_rad)
+        if not (is_finite(self.minimum_head_rad)
+                and is_finite(self.maximum_head_rad)
                 and self.minimum_head_rad < self.maximum_head_rad):
             raise ValueError('head limits must be finite and min < max')
-        if not math.isfinite(self.trajectory_duration) or self.trajectory_duration <= 0.0:
+        if not is_finite(self.trajectory_duration) or self.trajectory_duration <= 0.0:
             raise ValueError('trajectory_duration_s must be positive')
-        if not math.isfinite(self.feedback_timeout) or self.feedback_timeout <= 0.0:
+        if not is_finite(self.feedback_timeout) or self.feedback_timeout <= 0.0:
             raise ValueError('feedback_timeout_s must be positive')
+        if (not is_finite(self.calibration_command_quiet)
+                or self.calibration_command_quiet < 0.0):
+            raise ValueError('calibration_command_quiet_s must be nonnegative')
+        if (not is_finite(self.calibration_max_velocity)
+                or self.calibration_max_velocity < 0.0):
+            raise ValueError(
+                'calibration_max_velocity_rad_s must be nonnegative')
 
         command_topic = str(rospy.get_param(
             '~topics/command',
@@ -92,6 +128,9 @@ class HeadRotationDynamixelBridge:
 
         self._last_feedback_receipt = None
         self._last_joint_position = None
+        self._last_joint_velocity = None
+        self._last_command_receipt = None
+        self._dynamic_initialized = False
         self._trajectory_pub = rospy.Publisher(
             trajectory_topic, JointTrajectory, queue_size=1)
         self._feedback_pub = rospy.Publisher(
@@ -100,6 +139,14 @@ class HeadRotationDynamixelBridge:
             joint_state_topic, JointState, self._joint_state_cb, queue_size=1)
         self._command_sub = rospy.Subscriber(
             command_topic, Float64, self._command_cb, queue_size=1)
+        self._zero_here_service = rospy.Service(
+            '~zero_here', Trigger, self._zero_here_cb)
+        self._set_zero_service = rospy.Service(
+            '~set_zero', SetJointZero, self._set_zero_cb)
+        self._set_direction_service = rospy.Service(
+            '~set_direction', SetCommandSign, self._set_direction_cb)
+        self._dynamic_server = Server(
+            HeadRotationBridgeConfig, self._dynamic_config_cb)
 
         rospy.loginfo(
             '[HeadRotationBridge] ready joint=%s command=%s feedback=%s '
@@ -107,6 +154,107 @@ class HeadRotationDynamixelBridge:
             self.joint_name, command_topic, feedback_topic, trajectory_topic,
             joint_state_topic, self.command_sign, self.joint_zero_rad,
             self.minimum_head_rad, self.maximum_head_rad)
+
+    def _dynamic_config_cb(self, config, _level):
+        requested_zero = float(config.joint_zero_rad)
+        requested_sign = float(config.command_sign)
+        with self._config_lock:
+            if not is_finite(requested_zero):
+                rospy.logerr(
+                    '[HeadRotationBridge] rejected non-finite joint_zero_rad')
+                config.joint_zero_rad = self.joint_zero_rad
+                return config
+            if not is_finite(requested_sign) or abs(requested_sign) < 1e-12:
+                rospy.logerr(
+                    '[HeadRotationBridge] rejected command_sign=%s; use +1 or -1',
+                    config.command_sign)
+                config.command_sign = int(math.copysign(1, self.command_sign))
+                return config
+
+            changed = (requested_zero != self.joint_zero_rad
+                       or requested_sign != self.command_sign)
+            if changed and self._dynamic_initialized:
+                safe, reason = self._calibration_is_safe()
+                if not safe:
+                    rospy.logerr(
+                        '[HeadRotationBridge] rejected calibration update: %s',
+                        reason)
+                    config.joint_zero_rad = self.joint_zero_rad
+                    config.command_sign = int(self.command_sign)
+                    return config
+            self.joint_zero_rad = requested_zero
+            self.command_sign = requested_sign
+            measured = self._last_joint_position
+            self._dynamic_initialized = True
+
+        if changed:
+            rospy.logwarn(
+                '[HeadRotationBridge] calibration updated dynamically: '
+                'sign=%+.0f zero=%.6f rad', requested_sign, requested_zero)
+            if measured is not None:
+                self._feedback_pub.publish(Float64(data=joint_to_head(
+                    measured, requested_sign, requested_zero)))
+        return config
+
+    def _calibration_is_safe(self):
+        fresh, age = self._feedback_is_fresh()
+        if not fresh:
+            detail = 'unavailable' if not is_finite(age) else '%.3fs old' % age
+            return False, '%s feedback %s' % (self.joint_name, detail)
+        if self._last_joint_velocity is None:
+            return False, '%s velocity unavailable' % self.joint_name
+        if abs(self._last_joint_velocity) > self.calibration_max_velocity:
+            return False, '%s is moving at %.4frad/s' % (
+                self.joint_name, self._last_joint_velocity)
+        if self._last_command_receipt is not None:
+            command_age = max(
+                0.0, (rospy.Time.now() - self._last_command_receipt).to_sec())
+            required_quiet = max(
+                self.calibration_command_quiet, self.trajectory_duration)
+            if command_age < required_quiet:
+                return False, 'command received %.3fs ago' % command_age
+        return True, 'safe'
+
+    def _update_calibration(self, zero=None, sign=None):
+        update = {}
+        if zero is not None:
+            update['joint_zero_rad'] = float(zero)
+        if sign is not None:
+            update['command_sign'] = int(sign)
+        result = self._dynamic_server.update_configuration(update)
+        return ((zero is None or result.joint_zero_rad == float(zero))
+                and (sign is None or result.command_sign == int(sign)))
+
+    def _zero_here_cb(self, _request):
+        with self._config_lock:
+            measured = self._last_joint_position
+        if measured is None:
+            return TriggerResponse(False, 'body_joint feedback unavailable')
+        if not self._update_calibration(zero=measured):
+            return TriggerResponse(False, 'unsafe calibration change; see node log')
+        return TriggerResponse(
+            True, 'logical zero set to %.6frad' % measured)
+
+    def _set_zero_cb(self, request):
+        requested = float(request.joint_zero_rad)
+        if not is_finite(requested):
+            return SetJointZeroResponse(False, 'joint_zero_rad must be finite')
+        if not self._update_calibration(zero=requested):
+            return SetJointZeroResponse(
+                False, 'unsafe calibration change; see node log')
+        return SetJointZeroResponse(
+            True, 'joint_zero_rad set to %.6frad' % requested)
+
+    def _set_direction_cb(self, request):
+        requested = int(request.command_sign)
+        if requested not in (-1, 1):
+            return SetCommandSignResponse(
+                False, 'command_sign must be +1 or -1')
+        if not self._update_calibration(sign=requested):
+            return SetCommandSignResponse(
+                False, 'unsafe calibration change; see node log')
+        return SetCommandSignResponse(
+            True, 'command_sign set to %+d' % requested)
 
     def _joint_state_cb(self, message):
         measured = joint_position(message, self.joint_name)
@@ -117,9 +265,14 @@ class HeadRotationDynamixelBridge:
                 self.joint_name)
             return
         self._last_joint_position = measured
+        self._last_joint_velocity = named_value(
+            message, self.joint_name, 'velocity')
         self._last_feedback_receipt = rospy.Time.now()
+        with self._config_lock:
+            command_sign = self.command_sign
+            joint_zero_rad = self.joint_zero_rad
         logical_angle = joint_to_head(
-            measured, self.command_sign, self.joint_zero_rad)
+            measured, command_sign, joint_zero_rad)
         self._feedback_pub.publish(Float64(data=logical_angle))
 
     def _feedback_is_fresh(self):
@@ -131,14 +284,15 @@ class HeadRotationDynamixelBridge:
         return age <= self.feedback_timeout, age
 
     def _command_cb(self, message):
+        self._last_command_receipt = rospy.Time.now()
         requested = float(message.data)
-        if not math.isfinite(requested):
+        if not is_finite(requested):
             rospy.logerr('[HeadRotationBridge] rejected non-finite command')
             return
 
         fresh, age = self._feedback_is_fresh()
         if self.require_fresh_feedback and not fresh:
-            detail = 'unavailable' if not math.isfinite(age) else '%.3fs old' % age
+            detail = 'unavailable' if not is_finite(age) else '%.3fs old' % age
             rospy.logerr(
                 '[HeadRotationBridge] rejected %.3frad command: %s feedback %s',
                 requested, self.joint_name, detail)
@@ -158,8 +312,11 @@ class HeadRotationDynamixelBridge:
                 '[HeadRotationBridge] clamped %.3frad command to %.3frad',
                 requested, target)
 
+        with self._config_lock:
+            command_sign = self.command_sign
+            joint_zero_rad = self.joint_zero_rad
         joint_target = head_to_joint(
-            target, self.command_sign, self.joint_zero_rad)
+            target, command_sign, joint_zero_rad)
         trajectory = JointTrajectory()
         trajectory.header.stamp = rospy.Time.now()
         trajectory.joint_names = [self.joint_name]

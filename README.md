@@ -62,6 +62,44 @@ Before automatic use, edit `config/body_config.yaml` and verify:
 - `limits`: safe logical head-angle range
 - the serial port, motor ID, baud rate, and protocol configuration
 
+`command_sign` and `joint_zero_rad` can also be changed while the bridge is
+running:
+
+```bash
+rosrun rqt_reconfigure rqt_reconfigure
+
+# Command-line alternatives
+rosrun dynamic_reconfigure dynparam set \
+  /head_rotation_dynamixel_bridge joint_zero_rad 0.3
+rosrun dynamic_reconfigure dynparam set \
+  /head_rotation_dynamixel_bridge command_sign -1
+```
+
+The new calibration applies immediately to subsequent commands and measured
+feedback. It does not rewrite a trajectory that is already in progress. The
+YAML file remains the startup default, so update it separately if the new
+calibration must persist after a restart.
+
+For guarded runtime calibration, stop command publication, wait at least two
+seconds, and make sure the joint is stationary. Then use one of these services:
+
+```bash
+# Make the current measured pose logical zero.
+rosservice call /head_rotation_dynamixel_bridge/zero_here
+
+# Set an explicit measured-joint zero or direction.
+rosservice call /head_rotation_dynamixel_bridge/set_zero \
+  "joint_zero_rad: 0.3"
+rosservice call /head_rotation_dynamixel_bridge/set_direction \
+  "command_sign: -1"
+```
+
+Both the services and Dynamic Reconfigure reject changes if feedback is stale,
+joint velocity exceeds `calibration_max_velocity_rad_s`, or a command arrived
+within the greater of `calibration_command_quiet_s` and the configured
+trajectory duration. `zero_here` uses the latest measured `body_joint`
+position atomically.
+
 The bridge rejects commands when joint feedback is missing/stale and rejects
 out-of-range targets by default.
 

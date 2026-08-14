@@ -12,6 +12,8 @@ limits:
 trajectory_duration_s: 1.0
 feedback_timeout_s: 1.0
 require_fresh_feedback_before_command: true
+calibration_command_quiet_s: 2.0
+calibration_max_velocity_rad_s: 0.01
 # Reject out-of-range commands by default; silently saturating a head target
 # can make the pipeline believe it is working on a different angular slice.
 clamp_commands: false
