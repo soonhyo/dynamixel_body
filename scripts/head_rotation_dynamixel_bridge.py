@@ -83,6 +83,10 @@ class HeadRotationDynamixelBridge:
             '~require_fresh_feedback_before_command', True))
         self.clamp_commands = bool(rospy.get_param(
             '~clamp_commands', False))
+        self.move_to_zero_on_start = bool(rospy.get_param(
+            '~startup/move_to_zero', True))
+        self.startup_timeout = float(rospy.get_param(
+            '~startup/timeout_s', 30.0))
         self.calibration_command_quiet = float(rospy.get_param(
             '~calibration_command_quiet_s', 2.0))
         self.calibration_max_velocity = float(rospy.get_param(
@@ -103,6 +107,11 @@ class HeadRotationDynamixelBridge:
             raise ValueError('trajectory_duration_s must be positive')
         if not is_finite(self.feedback_timeout) or self.feedback_timeout <= 0.0:
             raise ValueError('feedback_timeout_s must be positive')
+        if not is_finite(self.startup_timeout) or self.startup_timeout <= 0.0:
+            raise ValueError('startup/timeout_s must be positive')
+        if (self.move_to_zero_on_start
+                and not self.minimum_head_rad <= 0.0 <= self.maximum_head_rad):
+            raise ValueError('logical zero must be within the head limits')
         if (not is_finite(self.calibration_command_quiet)
                 or self.calibration_command_quiet < 0.0):
             raise ValueError('calibration_command_quiet_s must be nonnegative')
@@ -131,6 +140,9 @@ class HeadRotationDynamixelBridge:
         self._last_joint_velocity = None
         self._last_command_receipt = None
         self._dynamic_initialized = False
+        self._startup_lock = threading.RLock()
+        self._startup_pending = self.move_to_zero_on_start
+        self._startup_timer = None
         self._trajectory_pub = rospy.Publisher(
             trajectory_topic, JointTrajectory, queue_size=1)
         self._feedback_pub = rospy.Publisher(
@@ -148,12 +160,20 @@ class HeadRotationDynamixelBridge:
         self._dynamic_server = Server(
             HeadRotationBridgeConfig, self._dynamic_config_cb)
 
+        if self._startup_pending:
+            self._startup_deadline = (
+                rospy.Time.now() + rospy.Duration(self.startup_timeout))
+            self._startup_timer = rospy.Timer(
+                rospy.Duration(0.1), self._startup_zero_cb)
+
         rospy.loginfo(
             '[HeadRotationBridge] ready joint=%s command=%s feedback=%s '
-            'trajectory=%s states=%s sign=%+.3f zero=%.4f limits=[%.3f, %.3f]',
+            'trajectory=%s states=%s sign=%+.3f zero=%.4f limits=[%.3f, %.3f] '
+            'startup_zero=%s',
             self.joint_name, command_topic, feedback_topic, trajectory_topic,
             joint_state_topic, self.command_sign, self.joint_zero_rad,
-            self.minimum_head_rad, self.maximum_head_rad)
+            self.minimum_head_rad, self.maximum_head_rad,
+            self.move_to_zero_on_start)
 
     def _dynamic_config_cb(self, config, _level):
         requested_zero = float(config.joint_zero_rad)
@@ -283,12 +303,49 @@ class HeadRotationDynamixelBridge:
             (rospy.Time.now() - self._last_feedback_receipt).to_sec())
         return age <= self.feedback_timeout, age
 
+    def _finish_startup(self):
+        self._startup_pending = False
+        timer = self._startup_timer
+        self._startup_timer = None
+        if timer is not None:
+            timer.shutdown()
+
+    def _startup_zero_cb(self, _event):
+        with self._startup_lock:
+            if not self._startup_pending:
+                return
+            if rospy.Time.now() >= self._startup_deadline:
+                self._finish_startup()
+                rospy.logerr(
+                    '[HeadRotationBridge] startup zero command timed out after '
+                    '%.1fs while waiting for controller connection and fresh '
+                    '%s feedback', self.startup_timeout, self.joint_name)
+                return
+            if self._trajectory_pub.get_num_connections() < 1:
+                return
+            fresh, _age = self._feedback_is_fresh()
+            if not fresh:
+                return
+            if self._publish_head_target(0.0):
+                self._finish_startup()
+                rospy.loginfo(
+                    '[HeadRotationBridge] startup move to logical 0deg sent')
+
     def _command_cb(self, message):
+        with self._startup_lock:
+            if self._publish_head_target(message.data):
+                if self._startup_pending:
+                    self._finish_startup()
+                    rospy.loginfo(
+                        '[HeadRotationBridge] startup zero skipped because an '
+                        'external command was accepted first')
+
+    def _publish_head_target(self, requested):
         self._last_command_receipt = rospy.Time.now()
-        requested = float(message.data)
+        requested = float(requested)
         if not is_finite(requested):
             rospy.logerr('[HeadRotationBridge] rejected non-finite command')
-            return
+            return False
 
         fresh, age = self._feedback_is_fresh()
         if self.require_fresh_feedback and not fresh:
@@ -296,7 +353,7 @@ class HeadRotationDynamixelBridge:
             rospy.logerr(
                 '[HeadRotationBridge] rejected %.3frad command: %s feedback %s',
                 requested, self.joint_name, detail)
-            return
+            return False
 
         target = requested
         if target < self.minimum_head_rad or target > self.maximum_head_rad:
@@ -305,7 +362,7 @@ class HeadRotationDynamixelBridge:
                     '[HeadRotationBridge] rejected %.3frad command outside '
                     '[%.3f, %.3f]', requested, self.minimum_head_rad,
                     self.maximum_head_rad)
-                return
+                return False
             target = min(self.maximum_head_rad,
                          max(self.minimum_head_rad, target))
             rospy.logwarn(
@@ -329,6 +386,7 @@ class HeadRotationDynamixelBridge:
             '[HeadRotationBridge] command head=%.3frad -> %s=%.3frad '
             '(duration=%.2fs)', target, self.joint_name, joint_target,
             self.trajectory_duration)
+        return True
 
 
 def main():

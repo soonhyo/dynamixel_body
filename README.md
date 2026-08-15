@@ -48,6 +48,12 @@ roslaunch dynamixel_body dynamixel_body.launch \
   joint_gui:=false
 ```
 
+At launch, the bridge waits for the trajectory controller and fresh joint
+feedback, then commands logical `0 deg` once. This logical zero maps to the
+calibrated `joint_zero_rad` value. Disable this behavior when needed with
+`move_to_zero_on_start:=false`; the wait timeout is configured by
+`startup/timeout_s` in `config/body_config.yaml`.
+
 The launch exposes:
 
 - `/hair_task_manager/head_rotation/command` (`std_msgs/Float64`, radians)

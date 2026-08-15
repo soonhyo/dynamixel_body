@@ -47,7 +47,18 @@ def test_launch_defaults_match_full_pipeline_topics():
     assert '/hair_task_manager/head_rotation/feedback' in launch
     assert 'type="head_rotation_dynamixel_bridge.py"' in launch
     assert 'launch_head_rotation_bridge' in launch
+    assert 'move_to_zero_on_start' in launch
+    assert 'name="startup/move_to_zero"' in launch
     assert 'default="/dev/dynamixel_body"' in launch
+
+
+def test_startup_zero_is_enabled_in_default_config():
+    config_path = os.path.join(PACKAGE, 'config', 'body_config.yaml')
+    with open(config_path) as stream:
+        config = stream.read()
+    assert 'startup:' in config
+    assert 'move_to_zero: true' in config
+    assert 'timeout_s: 30.0' in config
 
 
 def test_dynamic_reconfigure_exposes_calibration_parameters():

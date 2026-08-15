@@ -8,6 +8,8 @@
   <arg name="launch_rviz" default="false" doc="Launch RViz (use human.launch for full visualization)"/>
   <arg name="launch_head_rotation_bridge" default="true"
        doc="Expose full_pipeline Float64 head command and measured feedback"/>
+  <arg name="move_to_zero_on_start" default="true"
+       doc="Move the body joint to logical 0 degrees after startup"/>
   <arg name="bridge_config" default="$(find dynamixel_body)/config/body_config.yaml"/>
   <arg name="head_command_topic" default="/hair_task_manager/head_rotation/command"/>
   <arg name="head_feedback_topic" default="/hair_task_manager/head_rotation/feedback"/>
@@ -47,6 +49,7 @@
     <param name="topics/feedback" value="$(arg head_feedback_topic)"/>
     <param name="topics/joint_states" value="$(arg joint_state_topic)"/>
     <param name="topics/trajectory_command" value="$(arg trajectory_command_topic)"/>
+    <param name="startup/move_to_zero" value="$(arg move_to_zero_on_start)"/>
   </node>
 
 </launch>

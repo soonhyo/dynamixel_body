@@ -18,6 +18,12 @@ calibration_max_velocity_rad_s: 0.01
 # can make the pipeline believe it is working on a different angular slice.
 clamp_commands: false
 
+# Once the controller is connected and fresh joint feedback is available,
+# command logical 0 degrees exactly once.  This maps to joint_zero_rad.
+startup:
+  move_to_zero: true
+  timeout_s: 30.0
+
 topics:
   command: /hair_task_manager/head_rotation/command
   feedback: /hair_task_manager/head_rotation/feedback
